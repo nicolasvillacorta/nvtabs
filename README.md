@@ -101,6 +101,7 @@ npm run icons            # regenerate build\icon.png and build\icon.ico from src
 | `NV_TEST_MOVE=1` | Moving photos and notes between tabs (menu and drag & drop) |
 | `NV_TEST_PASTE=<mode>` | Pasting from the clipboard (`archivos`, `imagen`, `copy`) |
 | `NV_TEST_CAPTURE=fake` | Screenshots with a fake screen (`<folder>\pantalla-falsa.png`): toolbar, drawing, every action, settings |
+| `NV_TEST_STARTMENU=1` | Start menu self-repair (in a fake folder): stray "Electron" shortcuts removed, "NVTabs" shortcut fixed |
 
 ### Publishing a release
 

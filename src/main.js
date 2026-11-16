@@ -647,7 +647,7 @@ function registerIpc() {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
-    os: `Windows ${process.getSystemVersion()} (${process.arch})`,
+    os: windowsName(),
     root: ROOT,
   }));
 
@@ -708,6 +708,34 @@ async function runTest() {
         }
       } catch (e) { res.error = String(e); }
       fs.writeFileSync(path.join(TEST, 'pegar.json'), JSON.stringify(res, null, 2));
+      app.quit();
+    });
+    return;
+  }
+  if (process.env.NV_TEST_STARTMENU) {   // prueba de la autocorrección del menú Inicio (en una carpeta falsa)
+    win.webContents.once('did-finish-load', async () => {
+      const res = {};
+      try {
+        const dir = path.join(TEST, 'menu-inicio');
+        fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { recursive: true });
+        const exe = path.join(TEST, 'app-falsa', 'NVTabs.exe');
+        fs.mkdirSync(path.dirname(exe), { recursive: true }); fs.copyFileSync(process.execPath, exe);
+        const other = path.join(process.env.SystemRoot || 'C:\\Windows', 'notepad.exe');
+        shell.writeShortcutLink(path.join(dir, 'Electron.lnk'), 'create', { target: exe });          // el que crea Windows
+        shell.writeShortcutLink(path.join(dir, 'Bloc de notas.lnk'), 'create', { target: other });   // de otra app: no se toca
+        res.antes = fs.readdirSync(dir);
+        res.primeraPasada = await fixStartMenuShortcuts(dir, exe, ICON_ICO);
+        res.despues = fs.readdirSync(dir);
+        const l = shell.readShortcutLink(path.join(dir, START_SHORTCUT));
+        res.accesoNVTabs = { target: path.basename(l.target), aumid: l.appUserModelId, icono: path.basename(l.icon || '') };
+        // Si alguien cambia el ícono del acceso, se repara
+        shell.writeShortcutLink(path.join(dir, START_SHORTCUT), 'replace', { target: exe, appUserModelId: 'com.nvtabs.app' });
+        res.segundaPasada = await fixStartMenuShortcuts(dir, exe, ICON_ICO);
+        // Sin nada que corregir, no toca nada
+        res.terceraPasada = await fixStartMenuShortcuts(dir, exe, ICON_ICO);
+        res.sistemaEnAbout = windowsName();
+      } catch (e) { res.error = String(e.stack || e); }
+      fs.writeFileSync(path.join(TEST, 'menu-inicio.json'), JSON.stringify(res, null, 2));
       app.quit();
     });
     return;
@@ -1010,6 +1038,72 @@ function registerAppIdentity() {
   add('IconUri', ICON_ICO);
 }
 
+// Nombre de Windows para "About". Windows 11 sigue diciendo "10.0" por dentro: se reconoce por el
+// número de compilación (22000 o más). La versión de Configuración (p. ej. "25H2") sale del registro.
+function windowsName() {
+  const ver = process.getSystemVersion();   // "10.0.26200"
+  const build = Number(ver.split('.')[2]) || 0;
+  const name = build >= 22000 ? 'Windows 11' : (ver.startsWith('10.') ? 'Windows 10' : 'Windows');
+  let display = '';
+  try {
+    const out = execFileSync('reg', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion', '/v', 'DisplayVersion'], { encoding: 'utf8', windowsHide: true });
+    display = /DisplayVersion\s+REG_SZ\s+(\S+)/i.exec(out)?.[1] || '';
+  } catch {}
+  return `${name}${display ? ` ${display}` : ''} (build ${build || ver}, ${process.arch})`;
+}
+
+// ------------------------------------------------------------------ Menú Inicio
+// Al anclar la app a Inicio, Windows a veces crea su propio acceso directo con el nombre del .exe
+// ("Electron.lnk"). Como tiene el mismo identificador que "NVTabs.lnk", Inicio termina mostrando
+// "Electron" y su ícono. NVTabs revisa la carpeta del menú Inicio al arrancar y mientras está abierta:
+// manda a la Papelera los accesos que apuntan a su .exe con otro nombre y deja "NVTabs.lnk" correcto.
+const START_MENU = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs');
+const START_SHORTCUT = 'NVTabs.lnk';
+
+async function fixStartMenuShortcuts(dir = START_MENU, exe = process.execPath, icon = ICON_ICO) {
+  const result = { removed: [], created: false, updated: false };
+  const same = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+  let files = [];
+  try { files = fs.readdirSync(dir); } catch { return result; }
+  for (const f of files) {
+    if (!f.toLowerCase().endsWith('.lnk') || f.toLowerCase() === START_SHORTCUT.toLowerCase()) continue;
+    const p = path.join(dir, f);
+    let link;
+    try { link = shell.readShortcutLink(p); } catch { continue; }
+    if (!link.target || !same(link.target, exe)) continue;   // solo accesos a NVTabs.exe
+    try {
+      if (TEST) fs.rmSync(p); else await shell.trashItem(p);   // en las pruebas no se ensucia la Papelera
+      result.removed.push(f);
+    } catch {}
+  }
+  const ours = path.join(dir, START_SHORTCUT);
+  const opts = { target: exe, cwd: path.dirname(exe), icon, iconIndex: 0, appUserModelId: 'com.nvtabs.app', description: 'NVTabs' };
+  try {
+    if (!fs.existsSync(ours)) result.created = shell.writeShortcutLink(ours, 'create', opts);
+    else {
+      const l = shell.readShortcutLink(ours);
+      if (l.appUserModelId !== opts.appUserModelId || !l.icon || !same(l.icon, icon) || !same(l.target, exe)) {
+        result.updated = shell.writeShortcutLink(ours, 'replace', opts);
+      }
+    }
+  } catch {}
+  return result;
+}
+
+let startMenuWatcher = null;
+function watchStartMenu() {
+  if (!app.isPackaged || TEST || process.platform !== 'win32') return;
+  fixStartMenuShortcuts();
+  let timer = null;
+  try {
+    startMenuWatcher = fs.watch(START_MENU, (_event, name) => {
+      if (!name || !String(name).toLowerCase().endsWith('.lnk')) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => fixStartMenuShortcuts(), 1500);   // Windows escribe el acceso en varios pasos
+    });
+  } catch {}
+}
+
 // Iniciar con Windows (solo en la app instalada; arranca oculta en el área de notificación)
 function applyStartup() {
   if (!app.isPackaged || TEST) return;
@@ -1219,7 +1313,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     registerCaptureIpc();
     createWindow();
-    if (!TEST) { registerAppIdentity(); applyShortcut(); updateTray(); applyStartup(); }
+    if (!TEST) { registerAppIdentity(); watchStartMenu(); applyShortcut(); updateTray(); applyStartup(); }
   });
 
   app.on('before-quit', () => { quitting = true; });

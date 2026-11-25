@@ -3,8 +3,8 @@
 [English](README.md) · **Español**
 
 App de escritorio para Windows, gratuita y de código abierto, para ver y organizar tus fotos y notas en pestañas
-(por ejemplo "Ventas", "Compras", "Clientes"...). Todo queda en tu computadora: lo único que se conecta a internet es
-*Search with Google Lens*, y solo cuando lo eliges.
+(por ejemplo "Ventas", "Compras", "Clientes"...). Todo queda en tu computadora: NVTabs solo se conecta a internet para buscar versiones
+nuevas en GitHub (lee el número de la última versión, no envía nada tuyo) y cuando eliges *Search with Google Lens*.
 
 > La app está en inglés. En esta guía los nombres de botones y menús aparecen tal como se ven en la app.
 
@@ -66,6 +66,9 @@ En los dos casos, tus fotos y notas se guardan en `Documentos\NVTabs`.
     **Save to tab…** la guarda en otra pestaña de NVTabs; **Save as…** (`Ctrl+S`) la guarda en cualquier carpeta de
     tu PC.
   - `Esc` cancela.
+- **Actualizaciones:** cuando se publica una versión nueva, aparece arriba un botón **Update to X.Y.Z**. Al hacer clic
+  ves las novedades y con **Update now** NVTabs la descarga, comprueba que llegó entera y se reinicia con la versión
+  nueva. También puedes usar `⋯` → *Check for updates…*, o desactivar la búsqueda automática en *Settings*.
 - **Sigue funcionando en segundo plano:** al cerrar la ventana, NVTabs queda en el área de notificación (junto al
   reloj) para que el atajo siempre funcione. Para cerrarla del todo: clic derecho en su ícono → *Quit NVTabs*, o
   `⋯` → *Quit NVTabs*. En `⋯` → *Settings* (`Ctrl+,`) puedes cambiar el atajo, desactivar el segundo plano o hacer

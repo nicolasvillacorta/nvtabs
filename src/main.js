@@ -39,6 +39,8 @@ let config = {
   background: true,         // al cerrar la ventana sigue corriendo en el área de notificación
   startup: false,           // iniciar con Windows (oculta, en segundo plano)
   backgroundNoticeShown: false,
+  autoUpdate: true,         // buscar versiones nuevas en GitHub automáticamente
+  updateNotified: '',       // última versión nueva avisada con una notificación
 };
 const THEMES = ['system', 'light', 'dark'];
 function loadConfig() {
@@ -326,7 +328,15 @@ async function openInLens(p) {
 // ------------------------------------------------------------------ Ventana
 let win = null;
 let quitting = false;
+let pendingMaximize = false;   // la ventana estaba maximizada y todavía no se mostró
 const START_HIDDEN = process.argv.includes('--hidden');
+
+// Muestra la ventana (y la maximiza si así quedó la última vez)
+function revealWindow() {
+  if (!win || win.isDestroyed()) return;
+  if (pendingMaximize) { pendingMaximize = false; win.maximize(); }
+  win.show();
+}
 
 function overlayColors() {
   return nativeTheme.shouldUseDarkColors
@@ -364,13 +374,15 @@ function createWindow() {
       relaunchDisplayName: 'NVTabs',
     });
   }
-  if (config.maximized && !TEST) win.maximize();
+  // Maximizar una ventana escondida la hace visible en Windows: por eso se maximiza recién al mostrarla
+  // (si no, al iniciar con Windows la ventana aparecía aunque debía quedar solo junto al reloj).
+  pendingMaximize = !!config.maximized && !TEST;
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   // Al iniciar con Windows (--hidden) la app arranca solo en el área de notificación
-  win.once('ready-to-show', () => { if (!TEST && !(START_HIDDEN && config.background)) win.show(); });
+  win.once('ready-to-show', () => { if (!TEST && !(START_HIDDEN && config.background)) revealWindow(); });
 
   const remember = () => {
-    if (win.isDestroyed()) return;
+    if (win.isDestroyed() || pendingMaximize) return;   // todavía no se mostró: no pisar lo guardado
     config.maximized = win.isMaximized();
     if (!win.isMaximized() && !win.isMinimized()) config.bounds = win.getBounds();
     saveConfig();
@@ -445,6 +457,7 @@ function registerIpc() {
     }
     if ('background' in s) { config.background = !!s.background; if (!config.background) config.startup = false; }
     if ('startup' in s) { config.startup = !!s.startup; if (config.startup) config.background = true; }
+    if ('autoUpdate' in s) config.autoUpdate = !!s.autoUpdate;
     saveConfig(); updateTray(); applyStartup();
     return settingsState();
   });
@@ -452,6 +465,15 @@ function registerIpc() {
   // Mientras se graba un atajo nuevo en Configuración, el actual no debe disparar capturas
   handle('shortcut:pause', (paused) => { if (paused) globalShortcut.unregisterAll(); else applyShortcut(); });
   handle('capture:start', () => { startCapture({ fromApp: true }); });
+
+  // Actualizaciones
+  handle('update:state', () => updateState());
+  handle('update:check', async () => {
+    try { return await checkForUpdates({ manual: true }); }
+    catch (e) { fail(`Couldn't check for updates: ${e.message}`); }
+  });
+  handle('update:apply', () => applyUpdate());
+  handle('update:page', () => shell.openExternal(updateInfo?.url || RELEASES_PAGE));
   handle('app:quit', () => quitApp());
   handle('tabs', () => tabsSummary());
   handle('photos', (name) => listItems(name));
@@ -708,6 +730,65 @@ async function runTest() {
         }
       } catch (e) { res.error = String(e); }
       fs.writeFileSync(path.join(TEST, 'pegar.json'), JSON.stringify(res, null, 2));
+      app.quit();
+    });
+    return;
+  }
+  if (process.env.NV_TEST_UPDATE) {   // prueba de actualizaciones (GitHub real para consultar; release falsa para instalar)
+    win.webContents.once('did-finish-load', async () => {
+      const res = {};
+      const js = (code) => win.webContents.executeJavaScript(code);
+      try {
+        await wait(1500);
+        // 1) Consulta real a GitHub: esta versión ya es la última publicada
+        const real = process.env.NV_TEST_UPDATE_JSON; delete process.env.NV_TEST_UPDATE_JSON;
+        res.githubReal = await js(`nv.checkUpdates().then(s => ({ current: s.current, available: s.available }), e => e.message)`);
+        process.env.NV_TEST_UPDATE_JSON = real;
+        // 2) Release falsa con la huella equivocada: no se instala
+        const good = JSON.parse(fs.readFileSync(real, 'utf8').replace(/^﻿/, ''));
+        const bad = path.join(TEST, 'release-mala.json');
+        fs.writeFileSync(bad, JSON.stringify({ ...good, assets: good.assets.map((a) => ({ ...a, digest: `sha256:${'0'.repeat(64)}` })) }));
+        process.env.NV_TEST_UPDATE_JSON = bad;
+        await js('nv.checkUpdates()');
+        res.huellaEquivocada = await js(`nv.applyUpdate().then(() => 'instaló', e => e.message)`);
+        // 3) Release falsa correcta: aparece el botón, la ventana de novedades y se instala
+        process.env.NV_TEST_UPDATE_JSON = real;
+        res.consulta = await js(`nv.checkUpdates().then(s => ({ available: s.available, version: s.version, current: s.current }))`);
+        await wait(400);
+        res.boton = await js(`({ visible: !document.querySelector('#updatePill').hidden, texto: document.querySelector('#updatePillText').textContent })`);
+        await shot('u1-boton');
+        await js('openUpdate()'); await wait(500); await shot('u2-novedades');
+        res.notas = await js(`document.querySelector('#updNotes').textContent.slice(0, 200)`);
+        res.instalar = await js(`nv.applyUpdate().then(r => ({ ok: r.ok, work: r.work }), e => e.message)`);
+        await wait(500); await shot('u3-progreso');
+        res.progreso = await js(`document.querySelector('#updProgressText').textContent`);
+        await js('openSettings()'); await wait(400); await shot('u4-settings');
+      } catch (e) { res.error = String(e.stack || e); }
+      fs.writeFileSync(path.join(TEST, 'actualizar.json'), JSON.stringify(res, null, 2));
+      app.quit();   // el script de actualización espera a que esta app se cierre para copiar los archivos
+    });
+    return;
+  }
+  if (process.env.NV_TEST_HIDDEN) {   // ¿qué hace aparecer una ventana escondida? (inicio con Windows)
+    win.webContents.once('did-finish-load', async () => {
+      const res = {};
+      try {
+        await wait(1000);
+        res.alCargar = win.isVisible();
+        win.setTitleBarOverlay(overlayColors()); await wait(500);
+        res.trasColoresBarraTitulo = win.isVisible();
+        win.setBackgroundColor('#17181b'); await wait(500);
+        res.trasColorFondo = win.isVisible();
+        nativeTheme.themeSource = nativeTheme.shouldUseDarkColors ? 'light' : 'dark'; await wait(800);
+        res.trasCambioDeTema = win.isVisible();
+        // Con el arreglo: una ventana que quedó maximizada NO se muestra al arrancar escondida...
+        pendingMaximize = true;
+        res.maximizadaPendienteSigueOculta = !win.isVisible();
+        // ...y al abrirla (ícono junto al reloj o atajo) se muestra maximizada
+        revealWindow(); await wait(800);
+        res.alAbrirlaSeMuestraMaximizada = win.isVisible() && win.isMaximized();
+      } catch (e) { res.error = String(e.stack || e); }
+      fs.writeFileSync(path.join(TEST, 'oculta.json'), JSON.stringify(res, null, 2));
       app.quit();
     });
     return;
@@ -978,7 +1059,7 @@ let lastNotification = null;   // referencia para que no se libere antes del cli
 function showWindow() {
   if (!win || win.isDestroyed()) { createWindow(); return; }
   if (win.isMinimized()) win.restore();
-  win.show(); win.focus();
+  revealWindow(); win.focus();
 }
 
 function quitApp() { quitting = true; app.quit(); }
@@ -1006,6 +1087,10 @@ function updateTray() {
   }
   if (!config.background && tray) { tray.destroy(); tray = null; }
   tray?.setContextMenu(Menu.buildFromTemplate([
+    ...(updateInfo ? [
+      { label: `Update to ${updateInfo.version}…`, click: () => { showWindow(); win?.webContents.send('update:open'); } },
+      { type: 'separator' },
+    ] : []),
     { label: 'Open NVTabs', click: showWindow },
     { label: 'Take screenshot', accelerator: config.shortcut || undefined, registerAccelerator: false, click: () => startCapture() },
     { type: 'separator' },
@@ -1111,7 +1196,203 @@ function applyStartup() {
 }
 
 function settingsState() {
-  return { shortcut: config.shortcut, shortcutOk, background: config.background, startup: config.startup, canStartup: app.isPackaged };
+  return {
+    shortcut: config.shortcut, shortcutOk, background: config.background, startup: config.startup, canStartup: app.isPackaged,
+    autoUpdate: config.autoUpdate !== false, version: app.getVersion(),
+  };
+}
+
+// ------------------------------------------------------------------ Actualizaciones
+// NVTabs consulta la última versión publicada en GitHub (solo lee el número de versión y las notas:
+// no envía datos tuyos). Si hay una más nueva, la descarga (el .zip portable), comprueba que llegó
+// entera con la huella SHA-256 que publica GitHub, y un pequeño script copia los archivos nuevos
+// cuando NVTabs se cierra y la vuelve a abrir. El .exe sigue siendo el original de Electron.
+const RELEASES_API = 'https://api.github.com/repos/nicolasvillacorta/nvtabs/releases/latest';
+const RELEASES_PAGE = 'https://github.com/nicolasvillacorta/nvtabs/releases/latest';
+const UPDATE_EVERY = 6 * 60 * 60 * 1000;   // cada 6 horas mientras la app está abierta
+let updateInfo = null;                     // { version, current, notes, url, asset: { url, size, digest } }
+let updating = false;
+
+function cmpVersions(a, b) {
+  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  return 0;
+}
+
+function updateState() {
+  return {
+    current: app.getVersion(),
+    available: !!updateInfo,
+    version: updateInfo?.version || '',
+    notes: updateInfo?.notes || '',
+    url: updateInfo?.url || RELEASES_PAGE,
+    size: updateInfo?.asset.size || 0,
+    canInstall: app.isPackaged || !!TEST,
+    updating,
+  };
+}
+
+function sendUpdateState() {
+  if (win && !win.isDestroyed()) win.webContents.send('update:state', updateState());
+  updateTray();
+}
+
+async function fetchLatestRelease() {
+  if (TEST && process.env.NV_TEST_UPDATE_JSON) return JSON.parse(fs.readFileSync(process.env.NV_TEST_UPDATE_JSON, 'utf8').replace(/^﻿/, ''));
+  const r = await net.fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'NVTabs-updater' } });
+  if (!r.ok) throw new Error(`GitHub answered ${r.status}.`);
+  return r.json();
+}
+
+async function checkForUpdates({ manual = false } = {}) {
+  const rel = await fetchLatestRelease();
+  const version = String(rel.tag_name || '').replace(/^v/i, '');
+  const asset = (rel.assets || []).find((a) => /^NVTabs-Portable-.*\.zip$/i.test(a.name));
+  if (!version || !asset || rel.draft || rel.prerelease || cmpVersions(version, app.getVersion()) <= 0) {
+    updateInfo = null;
+  } else {
+    updateInfo = {
+      version, current: app.getVersion(), notes: String(rel.body || ''), url: rel.html_url || RELEASES_PAGE,
+      asset: { url: asset.browser_download_url, size: asset.size || 0, digest: String(asset.digest || '') },
+    };
+    if (!manual && config.updateNotified !== version) {   // una sola notificación por versión
+      config.updateNotified = version; saveConfig();
+      notify(`NVTabs ${version} is available`, 'Click to see what\'s new and update.', () => {
+        showWindow(); win?.webContents.send('update:open');
+      });
+    }
+  }
+  sendUpdateState();
+  return updateState();
+}
+
+function startUpdateChecks() {
+  if (TEST || !app.isPackaged) return;
+  const run = () => { if (config.autoUpdate !== false && !updating) checkForUpdates().catch(() => {}); };
+  setTimeout(run, 20 * 1000);   // un rato después de arrancar, para no demorar el inicio
+  setInterval(run, UPDATE_EVERY);
+}
+
+// Borra restos de actualizaciones anteriores (carpetas temporales)
+function cleanOldUpdates() {
+  if (TEST) return;
+  try {
+    for (const f of fs.readdirSync(app.getPath('temp'))) {
+      if (f.startsWith('nvtabs-update-')) fs.rmSync(path.join(app.getPath('temp'), f), { recursive: true, force: true });
+    }
+  } catch {}
+}
+
+function updateProgress(phase, done = 0, total = 0) {
+  if (win && !win.isDestroyed()) win.webContents.send('update:progress', { phase, done, total });
+}
+
+async function downloadTo(url, file, expectedDigest) {
+  if (TEST && url.startsWith('file:')) {   // pruebas: "release" falsa en un archivo local
+    fs.copyFileSync(fileURLToPath(url), file);
+    const digest = `sha256:${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`;
+    updateProgress('download', fs.statSync(file).size, fs.statSync(file).size);
+    if (expectedDigest && expectedDigest.toLowerCase() !== digest) throw new Error('The downloaded file is damaged (its fingerprint does not match). Please try again.');
+    return digest;
+  }
+  const res = await net.fetch(url, { headers: { 'User-Agent': 'NVTabs-updater' } });
+  if (!res.ok || !res.body) throw new Error(`The download failed (${res.status}).`);
+  const total = Number(res.headers.get('content-length')) || updateInfo?.asset.size || 0;
+  const out = fs.createWriteStream(file);
+  const hash = crypto.createHash('sha256');
+  const reader = res.body.getReader();
+  let done = 0; let last = 0;
+  try {
+    for (;;) {
+      const { done: end, value } = await reader.read();
+      if (end) break;
+      const buf = Buffer.from(value);
+      hash.update(buf); done += buf.length;
+      if (!out.write(buf)) await new Promise((r) => out.once('drain', r));
+      if (Date.now() - last > 150) { last = Date.now(); updateProgress('download', done, total); }
+    }
+  } finally {
+    await new Promise((r) => out.end(r));
+  }
+  updateProgress('download', done, total);
+  const digest = `sha256:${hash.digest('hex')}`;
+  if (expectedDigest && expectedDigest.toLowerCase() !== digest) throw new Error('The downloaded file is damaged (its fingerprint does not match). Please try again.');
+  return digest;
+}
+
+// Script del instalador (corre aparte, en modo Node): argumentos = pid, origen, destino, resultado, volver a abrir
+const UPDATER_SCRIPT = `'use strict';
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
+const [pid, src, dst, resultFile, relaunch] = process.argv.slice(2);
+const alive = (p) => { try { process.kill(Number(p), 0); return true; } catch { return false; } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+(async () => {
+  for (let i = 0; i < 240 && alive(pid); i++) await sleep(500);   // espera hasta 2 minutos a que NVTabs se cierre
+  await sleep(800);                                                  // y a que terminen sus procesos auxiliares
+  let ok = false; let err = '';
+  for (let attempt = 0; attempt < 20 && !ok; attempt++) {           // reintenta si algún archivo sigue en uso
+    try { fs.cpSync(src, dst, { recursive: true, force: true }); ok = true; }
+    catch (e) { err = String(e && e.message); await sleep(1000); }
+  }
+  fs.writeFileSync(resultFile, ok ? 'ok' : 'error: ' + err);
+  if (ok && relaunch === '1') {
+    const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;   // la app se abre normal, no en modo Node
+    spawn(path.join(dst, 'NVTabs.exe'), [], { detached: true, stdio: 'ignore', env }).unref();
+  }
+})();
+`;
+
+async function applyUpdate() {
+  if (!updateInfo) fail('There is no new version to install.');
+  if (updating) fail('The update is already in progress.');
+  if (!app.isPackaged && !TEST) fail('Updates can only be installed in the installed app, not when running from the source code.');
+  const installDir = TEST ? process.env.NV_TEST_INSTALL_DIR : path.dirname(process.execPath);
+  // Si la carpeta de NVTabs no se puede escribir (por ejemplo, en Archivos de programa), se abre la página de descarga
+  try {
+    const probe = path.join(installDir, `.nvtabs-write-test-${Date.now()}`);
+    fs.writeFileSync(probe, ''); fs.rmSync(probe);
+  } catch {
+    if (!TEST) shell.openExternal(updateInfo.url);
+    fail('NVTabs can\'t update itself in this folder. The download page was opened instead.');
+  }
+  updating = true; sendUpdateState();
+  try {
+    const work = path.join(app.getPath('temp'), `nvtabs-update-${updateInfo.version}`);
+    fs.rmSync(work, { recursive: true, force: true });
+    fs.mkdirSync(path.join(work, 'files'), { recursive: true });
+    const zip = path.join(work, 'NVTabs.zip');
+    updateProgress('download', 0, updateInfo.asset.size);
+    await downloadTo(updateInfo.asset.url, zip, updateInfo.asset.digest);
+    updateProgress('install');
+    // Windows 10/11 trae tar.exe, que descomprime .zip
+    await new Promise((resolve, reject) => execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'),
+      ['-xf', zip, '-C', path.join(work, 'files')], { windowsHide: true }, (err) => (err ? reject(new Error('The update could not be unpacked.')) : resolve())));
+    const files = path.join(work, 'files');
+    if (!fs.existsSync(path.join(files, 'NVTabs.exe')) || !fs.existsSync(path.join(files, 'resources', 'app.asar'))) {
+      throw new Error('The downloaded update is not a valid NVTabs package.');
+    }
+    // El instalador corre en el Electron de la versión NUEVA (ya descomprimido en la carpeta temporal),
+    // en modo "Node" (ELECTRON_RUN_AS_NODE) y separado de NVTabs ("detached"). Así sobrevive al cierre
+    // de la app (Node cierra los procesos que lanza normalmente al terminar) y no usa PowerShell.
+    // Espera a que NVTabs se cierre, copia los archivos nuevos y la vuelve a abrir.
+    const relaunch = !TEST;
+    const updater = path.join(work, 'apply-update.js');
+    fs.writeFileSync(updater, UPDATER_SCRIPT);
+    const child = spawn(path.join(files, 'NVTabs.exe'),
+      [updater, String(process.pid), files, installDir, path.join(work, 'result.txt'), relaunch ? '1' : '0'],
+      { detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+    child.on('error', () => {});
+    child.unref();
+    updateProgress('restart');
+    if (!TEST) setTimeout(quitApp, 600);
+    return { ok: true, work };
+  } catch (e) {
+    updating = false; sendUpdateState();
+    throw e instanceof UserError ? e : new UserError(e.message);
+  }
 }
 
 // ------------------------------------------------------------------ Captura de pantalla
@@ -1313,7 +1594,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     registerCaptureIpc();
     createWindow();
-    if (!TEST) { registerAppIdentity(); watchStartMenu(); applyShortcut(); updateTray(); applyStartup(); }
+    if (!TEST) { registerAppIdentity(); watchStartMenu(); applyShortcut(); updateTray(); applyStartup(); cleanOldUpdates(); startUpdateChecks(); }
   });
 
   app.on('before-quit', () => { quitting = true; });

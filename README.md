@@ -3,7 +3,8 @@
 **English** · [Español](README.es.md)
 
 A free and open source Windows desktop app to view and organize your photos and notes in tabs
-(for example "Sales", "Purchases", "Clients"...). Everything stays on your computer: the only time NVTabs goes online is when you choose *Search with Google Lens*.
+(for example "Sales", "Purchases", "Clients"...). Everything stays on your computer: NVTabs only goes online to check GitHub for new versions (it reads the latest
+version number, nothing about you is sent) and when you choose *Search with Google Lens*.
 
 ## Try it
 
@@ -57,6 +58,9 @@ Your photos and notes are saved in `Documents\NVTabs` either way.
   - **Save to Unsorted** (`Enter` or double-click), **Search with Google Lens** (also saves it to Unsorted),
     **Copy** (`Ctrl+C`), **Save to tab…** (any other NVTabs tab) or **Save as…** (`Ctrl+S`, any folder on your PC).
   - `Esc` cancels.
+- **Updates:** when a new version is published, an **Update to X.Y.Z** button appears at the top. Click it to see
+  what's new and **Update now**: NVTabs downloads it, checks it arrived intact and restarts with the new version.
+  You can also use `⋯` → *Check for updates…*, or turn off the automatic check in *Settings*.
 - **Runs in the background:** closing the window keeps NVTabs in the notification area (next to the clock) so the
   shortcut always works. Quit it from its icon or from `⋯` → *Quit NVTabs*. In `⋯` → *Settings* (`Ctrl+,`) you can
   change the shortcut, turn off the background mode, or make NVTabs start with Windows.
@@ -102,6 +106,8 @@ npm run icons            # regenerate build\icon.png and build\icon.ico from src
 | `NV_TEST_PASTE=<mode>` | Pasting from the clipboard (`archivos`, `imagen`, `copy`) |
 | `NV_TEST_CAPTURE=fake` | Screenshots with a fake screen (`<folder>\pantalla-falsa.png`): toolbar, drawing, every action, settings |
 | `NV_TEST_STARTMENU=1` | Start menu self-repair (in a fake folder): stray "Electron" shortcuts removed, "NVTabs" shortcut fixed |
+| `NV_TEST_HIDDEN=1` | Starting hidden: a window that was left maximized stays hidden until you open it |
+| `NV_TEST_UPDATE=1` | Updates: real GitHub check, plus a fake release (`NV_TEST_UPDATE_JSON`) installed into a fake folder (`NV_TEST_INSTALL_DIR`) |
 
 ### Publishing a release
 

@@ -50,6 +50,14 @@ contextBridge.exposeInMainWorld('nv', {
   takeScreenshot: () => call('capture:start'),
   quit: () => call('app:quit'),
 
+  updateState: () => call('update:state'),
+  checkUpdates: () => call('update:check'),
+  applyUpdate: () => call('update:apply'),
+  openUpdatePage: () => call('update:page'),
+  onUpdateState: (cb) => ipcRenderer.on('update:state', (_e, s) => cb(s)),
+  onUpdateProgress: (cb) => ipcRenderer.on('update:progress', (_e, p) => cb(p)),
+  onUpdateOpen: (cb) => ipcRenderer.on('update:open', () => cb()),
+
   pathForFile: (file) => webUtils.getPathForFile(file),
   onFocus: (cb) => ipcRenderer.on('window:focus', () => cb()),
   onItemsChanged: (cb) => ipcRenderer.on('items:changed', (_e, tab) => cb(tab)),

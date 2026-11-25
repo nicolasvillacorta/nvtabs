@@ -28,8 +28,12 @@ This program will not transfer any information to other networked systems unless
 requested by the user or the person installing or operating it.
 
 NVTabs works offline: photos, notes, settings and thumbnails are stored only on the user's computer
-(`Documents\NVTabs` and `%APPDATA%\NVTabs`). The only exception is *Search with Google Lens*: when the user
-explicitly chooses it for a photo, that image is uploaded to Google Lens from the user's own browser.
+(`Documents\NVTabs` and `%APPDATA%\NVTabs`). It only connects to the internet in two cases:
+
+- **Update checks:** NVTabs asks the GitHub API for the latest published version (no personal data is sent) and, only
+  when the user clicks *Update now*, downloads it from GitHub Releases. The automatic check can be turned off in *Settings*.
+- **Search with Google Lens:** when the user explicitly chooses it for a photo, that image is uploaded to Google Lens
+  from the user's own browser.
 
 ---
 
@@ -38,5 +42,6 @@ explicitly chooses it for a photo, that image is uploaded to Google Lens from th
 - Solo se firman las versiones oficiales publicadas en *Releases*, compiladas automáticamente por GitHub
   a partir del código público de este repositorio.
 - Cada firma la aprueba manualmente Nicolas Villacorta.
-- NVTabs no envía información a internet: todo queda en la computadora del usuario. La única excepción es
-  "Search with Google Lens": cuando el usuario lo elige, esa imagen se sube a Google Lens desde su navegador.
+- NVTabs no envía información a internet: todo queda en la computadora del usuario. Solo se conecta para buscar
+  versiones nuevas en GitHub (sin enviar datos personales; se puede desactivar) y para "Search with Google Lens",
+  cuando el usuario lo elige: esa imagen se sube a Google Lens desde su navegador.

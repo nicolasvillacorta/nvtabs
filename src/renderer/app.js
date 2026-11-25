@@ -725,12 +725,14 @@ $('#appMenu').addEventListener('click', async () => {
     '-',
     { id: 'issues', label: 'Report an issue' },
     { id: 'repo', label: 'Source code on GitHub' },
+    { id: 'updates', label: 'Check for updates…' },
     { id: 'about', label: 'About NVTabs' },
     '-',
     { id: 'quit', label: 'Quit NVTabs' },
   ]);
   if (choice === 'about') openAbout();
   else if (choice === 'settings') openSettings();
+  else if (choice === 'updates') checkNow();
   else if (choice === 'screenshot') guard(() => nv.takeScreenshot());
   else if (choice === 'quit') nv.quit();
   else if (choice?.startsWith('theme:')) setTheme(choice.slice(6));
@@ -749,6 +751,8 @@ function renderSettings(st) {
   $('#setBackground').checked = st.background;
   $('#setStartup').checked = st.startup;
   $('#setStartup').disabled = !st.canStartup;
+  $('#setAutoUpdate').checked = st.autoUpdate;
+  $('#setUpdateDesc').textContent = `You have version ${st.version}. NVTabs looks for new versions on GitHub and shows an "Update" button when there is one.`;
   $('#setStartupDesc').textContent = st.canStartup
     ? 'Opens NVTabs in the background when you sign in, ready for screenshots.'
     : 'Only available in the installed app (not when running from the source code).';
@@ -812,6 +816,92 @@ $('#setShortcut').addEventListener('click', async () => {
 $('#setShortcutClear').addEventListener('click', () => saveSettings({ shortcut: '' }));
 $('#setBackground').addEventListener('change', (e) => saveSettings({ background: e.target.checked }));
 $('#setStartup').addEventListener('change', (e) => saveSettings({ startup: e.target.checked }));
+$('#setAutoUpdate').addEventListener('change', (e) => saveSettings({ autoUpdate: e.target.checked }));
+$('#setCheckNow').addEventListener('click', () => checkNow());
+
+// ------------------------------------------------------------------ Actualizaciones
+let upd = { available: false };
+const updateOpen = () => !$('#update').hidden;
+
+function renderUpdatePill() {
+  $('#updatePill').hidden = !upd.available;
+  $('#updatePillText').textContent = `Update to ${upd.version}`;
+}
+
+// Las notas de GitHub vienen en Markdown: se muestran como texto simple (solo la parte en inglés)
+function plainNotes(md) {
+  const english = String(md || '').split(/\n-{3,}\s*\n/)[0];
+  return english
+    .split(/\r?\n/)
+    .filter((l) => !/^\s*\|?\s*-{3,}/.test(l))                      // separadores de tablas
+    .map((l) => l.replace(/^#{1,6}\s*/, '').replace(/^>\s?/, '')
+      .replace(/\*\*(.+?)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1').replace(/\*([^*]+)\*/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/^\s*\|(.*)\|\s*$/, (_m, row) => row.split('|').map((c) => c.trim()).filter(Boolean).join(' — ')))
+    .join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function renderUpdateModal() {
+  $('#updTitle').textContent = `NVTabs ${upd.version} is available`;
+  const mb = upd.size ? ` · ${Math.round(upd.size / 1048576)} MB download` : '';
+  $('#updSub').textContent = `You have version ${upd.current}${mb}`;
+  $('#updNotes').textContent = plainNotes(upd.notes) || 'No release notes.';
+  $('#updNow').lastChild.textContent = upd.canInstall ? 'Update now' : 'Download from GitHub';
+  for (const id of ['#updNow', '#updLater', '#updClose']) $(id).disabled = !!upd.updating;
+}
+
+function openUpdate() {
+  if (!upd.available) return;
+  if (!upd.updating) $('#updProgress').hidden = true;   // sin restos de un intento anterior
+  renderUpdateModal();
+  $('#update').hidden = false;
+}
+function closeUpdate() { if (!upd.updating) $('#update').hidden = true; }
+
+async function checkNow() {
+  toast('Checking for updates…');
+  const s = await guard(() => nv.checkUpdates());
+  if (!s) return;
+  upd = s; renderUpdatePill();
+  if (s.available) openUpdate();
+  else toast(`You're up to date: NVTabs ${s.current} is the latest version.`);
+}
+
+$('#updatePill').addEventListener('click', openUpdate);
+$('#updClose').addEventListener('click', closeUpdate);
+$('#updLater').addEventListener('click', closeUpdate);
+$('#update').addEventListener('mousedown', (e) => { if (e.target === e.currentTarget) closeUpdate(); });
+$('#updPage').addEventListener('click', () => guard(() => nv.openUpdatePage()));
+$('#updNow').addEventListener('click', async () => {
+  if (!upd.canInstall) { guard(() => nv.openUpdatePage()); return; }
+  $('#updProgress').hidden = false;
+  $('#updBar').style.width = '0%';
+  $('#updProgressText').textContent = 'Starting the download…';
+  const r = await guard(() => nv.applyUpdate());
+  if (!r) $('#updProgress').hidden = true;   // falló: el error ya se mostró en un aviso
+});
+
+nv.onUpdateProgress((p) => {
+  $('#updProgress').hidden = false;
+  if (p.phase === 'download') {
+    const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+    $('#updBar').style.width = `${pct}%`;
+    $('#updProgressText').textContent = `Downloading… ${pct}% (${Math.round(p.done / 1048576)} of ${Math.round(p.total / 1048576)} MB)`;
+  } else if (p.phase === 'install') {
+    $('#updBar').style.width = '100%';
+    $('#updProgressText').textContent = 'Checking and preparing the new version…';
+  } else if (p.phase === 'restart') {
+    $('#updProgressText').textContent = 'Done! NVTabs will restart in a moment…';
+  }
+});
+nv.onUpdateState((s) => {
+  const failed = upd.updating && !s.updating;   // la instalación se canceló o falló
+  upd = s; renderUpdatePill();
+  if (failed) $('#updProgress').hidden = true;
+  if (updateOpen()) renderUpdateModal();
+});
+nv.onUpdateOpen(() => openUpdate());
+nv.updateState().then((s) => { upd = s; renderUpdatePill(); }).catch(() => {});
 $('#setClose').addEventListener('click', closeSettings);
 $('#settings').addEventListener('mousedown', (e) => { if (e.target === e.currentTarget) closeSettings(); });
 
@@ -852,6 +942,7 @@ document.addEventListener('keydown', (e) => {
     else if (ctrl && e.key.toLowerCase() === 's') { e.preventDefault(); saveNote(); }
     return;
   }
+  if (updateOpen()) { if (e.key === 'Escape') { closeUpdate(); e.preventDefault(); } return; }
   if (settingsOpen()) { if (e.key === 'Escape') { closeSettings(); e.preventDefault(); } return; }
   if (aboutOpen()) { if (e.key === 'Escape') { closeAbout(); e.preventDefault(); } return; }
   if (ctrl && e.key === ',') { openSettings(); e.preventDefault(); return; }

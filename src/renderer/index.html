@@ -16,6 +16,7 @@
     <div class="tabs" id="tabs" role="tablist"></div>
     <button class="tab-add" id="addTab" title="New tab (Ctrl+T)" data-icon="plus"></button>
     <div class="drag-space"></div>
+    <button class="update-pill" id="updatePill" data-icon="download" title="A new version of NVTabs is available" hidden><span id="updatePillText"></span></button>
     <button class="tab-add" id="appMenu" title="Menu" data-icon="more"></button>
   </header>
 
@@ -147,6 +148,17 @@
         <input type="checkbox" id="setBackground" class="switch">
       </label>
 
+      <div class="set-row">
+        <div class="set-text">
+          <div class="set-name">Check for updates automatically</div>
+          <div class="set-desc" id="setUpdateDesc"></div>
+        </div>
+        <div class="set-ctl">
+          <button class="btn" id="setCheckNow" title="Look for a new version now">Check now</button>
+          <input type="checkbox" id="setAutoUpdate" class="switch" title="Check GitHub for new versions automatically">
+        </div>
+      </div>
+
       <label class="set-row">
         <div class="set-text">
           <div class="set-name">Start with Windows</div>
@@ -154,6 +166,25 @@
         </div>
         <input type="checkbox" id="setStartup" class="switch">
       </label>
+    </div>
+  </div>
+
+  <div id="update" class="modal-back" hidden>
+    <div class="about update" role="dialog" aria-labelledby="updTitle">
+      <button class="about-close" id="updClose" data-icon="x" title="Close (Esc)"></button>
+      <img src="icon.svg" class="about-logo" alt="">
+      <h2 id="updTitle"></h2>
+      <div class="about-version" id="updSub"></div>
+      <div class="upd-notes" id="updNotes"></div>
+      <div class="upd-progress" id="updProgress" hidden>
+        <div class="upd-bar"><div id="updBar"></div></div>
+        <div id="updProgressText"></div>
+      </div>
+      <div class="upd-actions">
+        <button class="btn" id="updPage" data-icon="external">See it on GitHub</button>
+        <button class="btn" id="updLater">Later</button>
+        <button class="btn primary" id="updNow" data-icon="download">Update now</button>
+      </div>
     </div>
   </div>
 
